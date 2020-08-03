@@ -177,7 +177,9 @@ RUN set -ex ; \
     mv /tmp/envsubst /usr/local/bin/ ; \
     \
     ln -sf /dev/stdout /var/log/nginx/access.log ; \
-    ln -sf /dev/stderr /var/log/nginx/error.log ;
+    ln -sf /dev/stderr /var/log/nginx/error.log ; \
+    chown -R www-data:www-data /var/log/nginx ; \
+    chmod -R 755 /var/log/nginx ;
 
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY nginx.vh.default.conf /etc/nginx/conf.d/default.conf
