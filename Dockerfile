@@ -1,224 +1,110 @@
-FROM centos/s2i-core-centos7:1
+FROM debian:buster-slim
 
-# RHSCL rh-nginx116 image.
-#
-# Volumes:
-#  * /var/opt/rh/rh-nginx116/log/nginx/ - Storage for logs
+LABEL maintainer="NGINX Docker Maintainers <docker-maint@nginx.com>"
 
-EXPOSE 8080
-EXPOSE 8443
+ENV NGINX_VERSION   1.19.1
+ENV NJS_VERSION     0.4.2
+ENV PKG_RELEASE     1~buster
 
-ENV NAME=nginx \
-    NGINX_VERSION=1.16 \
-    NGINX_SHORT_VER=116 \
-    VERSION=0
-
-ENV SUMMARY="Platform for running nginx $NGINX_VERSION or building nginx-based application" \
-    DESCRIPTION="Nginx is a web server and a reverse proxy server for HTTP, SMTP, POP3 and IMAP \
-protocols, with a strong focus on high concurrency, performance and low memory usage. The container \
-image provides a containerized packaging of the nginx $NGINX_VERSION daemon. The image can be used \
-as a base image for other applications based on nginx $NGINX_VERSION web server. \
-Nginx server image can be extended using source-to-image tool."
-
-LABEL summary="${SUMMARY}" \
-      description="${DESCRIPTION}" \
-      io.k8s.description="${DESCRIPTION}" \
-      io.k8s.display-name="Nginx ${NGINX_VERSION}" \
-      io.openshift.expose-services="8080:http" \
-      io.openshift.expose-services="8443:https" \
-      io.openshift.tags="builder,${NAME},rh-${NAME}${NGINX_SHORT_VER}" \
-      com.redhat.component="rh-${NAME}${NGINX_SHORT_VER}-container" \
-      name="centos/${NAME}-${NGINX_SHORT_VER}-centos7" \
-      version="${NGINX_VERSION}" \
-      maintainer="SoftwareCollections.org <sclorg@redhat.com>" \
-      help="For more information visit https://github.com/sclorg/${NAME}-container" \
-      usage="s2i build <SOURCE-REPOSITORY> centos/${NAME}-${NGINX_SHORT_VER}-centos7:latest <APP-NAME>"
-
-ENV NGINX_CONFIGURATION_PATH=${APP_ROOT}/etc/nginx.d \
-    NGINX_CONF_PATH=/etc/opt/rh/rh-nginx${NGINX_SHORT_VER}/nginx/nginx.conf \
-    NGINX_DEFAULT_CONF_PATH=${APP_ROOT}/etc/nginx.default.d \
-    NGINX_CONTAINER_SCRIPTS_PATH=/usr/share/container-scripts/nginx \
-    NGINX_APP_ROOT=${APP_ROOT} \
-    NGINX_LOG_PATH=/var/opt/rh/rh-nginx${NGINX_SHORT_VER}/log/nginx \
-    NGINX_PERL_MODULE_PATH=${APP_ROOT}/etc/perl
-
-RUN yum install -y yum-utils gettext hostname && \
-    yum install -y centos-release-scl-rh && \
-    INSTALL_PKGS="nss_wrapper bind-utils rh-nginx${NGINX_SHORT_VER} rh-nginx${NGINX_SHORT_VER}-nginx \
-                  rh-nginx${NGINX_SHORT_VER}-nginx-mod-stream rh-nginx${NGINX_SHORT_VER}-nginx-mod-http-perl" && \
-    yum install -y --setopt=tsflags=nodocs $INSTALL_PKGS && \
-    rpm -V $INSTALL_PKGS && \
-    yum -y clean all --enablerepo='*'
-
-# Copy the S2I scripts from the specific language image to $STI_SCRIPTS_PATH
-COPY ./s2i/bin/ $STI_SCRIPTS_PATH
-
-# Copy extra files to the image.
-COPY ./root/ /
-
-# In order to drop the root user, we have to make some directories world
-# writeable as OpenShift default security model is to run the container under
-# random UID.
-RUN sed -i -f ${NGINX_APP_ROOT}/nginxconf.sed ${NGINX_CONF_PATH} && \
-    chmod a+rwx ${NGINX_CONF_PATH} && \
-    mkdir -p ${NGINX_APP_ROOT}/etc/nginx.d/ && \
-    mkdir -p ${NGINX_APP_ROOT}/etc/nginx.default.d/ && \
-    mkdir -p ${NGINX_APP_ROOT}/src/nginx-start/ && \
-    mkdir -p ${NGINX_CONTAINER_SCRIPTS_PATH}/nginx-start && \
-    mkdir -p ${NGINX_LOG_PATH} && \
-    mkdir -p ${NGINX_PERL_MODULE_PATH} && \
-    ln -s ${NGINX_LOG_PATH} /var/log/nginx && \
-    ln -s /etc/opt/rh/rh-nginx${NGINX_SHORT_VER}/nginx /etc/nginx && \
-    ln -s /opt/rh/rh-nginx${NGINX_SHORT_VER}/root/usr/share/nginx /usr/share/nginx && \
-    chmod -R a+rwx ${NGINX_APP_ROOT}/etc && \
-    chmod -R a+rwx /var/opt/rh/rh-nginx${NGINX_SHORT_VER} && \
-    chmod -R a+rwx ${NGINX_CONTAINER_SCRIPTS_PATH}/nginx-start && \
-    chown -R 1001:0 ${NGINX_APP_ROOT} && \
-    chown -R 1001:0 /var/opt/rh/rh-nginx${NGINX_SHORT_VER} && \
-    chown -R 1001:0 ${NGINX_CONTAINER_SCRIPTS_PATH}/nginx-start && \
-    chmod -R a+rwx /var/run && \
-    chown -R 1001:0 /var/run && \
-    rpm-file-permissions
-
-# RUN yum clean expire-cache && \
-#     yum install nginx-plus-module-modsecurity && \
-#     sed -i '1s/^/load_module modules/ngx_http_modsecurity_module.so; /' ${NGINX_CONF_PATH}
-
-# ============================================================
-
-ENV NAXSI_VERSION=0.56 
-
-WORKDIR /tmp
-
-
-RUN yum install -y wget curl gnupg && \
-    gpg_keys="\
-            0xB0F4253373F8F6F510D42178520A9993A1C052F8\
-            251A28DE2685AED4\
-            " ; \
-    curl \
-        -fSL \
-        https://github.com/nbs-system/naxsi/archive/$NAXSI_VERSION.tar.gz \
-        -o naxsi.tar.gz \
-    ; \
-    curl \
-        -fSL \
-        https://github.com/nbs-system/naxsi/releases/download/$NAXSI_VERSION/naxsi-$NAXSI_VERSION.tar.gz.asc \
-        -o naxsi.tar.gz.sig \
-    ; \
+RUN set -x \
+# create nginx user/group first, to be consistent throughout docker variants
+    && addgroup --system --gid 101 nginx \
+    && adduser --system --disabled-login --ingroup nginx --no-create-home --home /nonexistent --gecos "nginx user" --shell /bin/false --uid 101 nginx \
+    && apt-get update \
+    && apt-get install --no-install-recommends --no-install-suggests -y gnupg1 ca-certificates \
+    && \
+    NGINX_GPGKEY=573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62; \
+    found=''; \
+    for server in \
+        ha.pool.sks-keyservers.net \
+        hkp://keyserver.ubuntu.com:80 \
+        hkp://p80.pool.sks-keyservers.net:80 \
+        pgp.mit.edu \
+    ; do \
+        echo "Fetching GPG key $NGINX_GPGKEY from $server"; \
+        apt-key adv --keyserver "$server" --keyserver-options timeout=10 --recv-keys "$NGINX_GPGKEY" && found=yes && break; \
+    done; \
+    test -z "$found" && echo >&2 "error: failed to fetch GPG key $NGINX_GPGKEY" && exit 1; \
+    apt-get remove --purge --auto-remove -y gnupg1 && rm -rf /var/lib/apt/lists/* \
+    && dpkgArch="$(dpkg --print-architecture)" \
+    && nginxPackages=" \
+        nginx=${NGINX_VERSION}-${PKG_RELEASE} \
+        nginx-module-xslt=${NGINX_VERSION}-${PKG_RELEASE} \
+        nginx-module-geoip=${NGINX_VERSION}-${PKG_RELEASE} \
+        nginx-module-image-filter=${NGINX_VERSION}-${PKG_RELEASE} \
+        nginx-module-njs=${NGINX_VERSION}.${NJS_VERSION}-${PKG_RELEASE} \
+    " \
+    && case "$dpkgArch" in \
+        amd64|i386) \
+# arches officialy built by upstream
+            echo "deb https://nginx.org/packages/mainline/debian/ buster nginx" >> /etc/apt/sources.list.d/nginx.list \
+            && apt-get update \
+            ;; \
+        *) \
+# we're on an architecture upstream doesn't officially build for
+# let's build binaries from the published source packages
+            echo "deb-src https://nginx.org/packages/mainline/debian/ buster nginx" >> /etc/apt/sources.list.d/nginx.list \
+            \
+# new directory for storing sources and .deb files
+            && tempDir="$(mktemp -d)" \
+            && chmod 777 "$tempDir" \
+# (777 to ensure APT's "_apt" user can access it too)
+            \
+# save list of currently-installed packages so build dependencies can be cleanly removed later
+            && savedAptMark="$(apt-mark showmanual)" \
+            \
+# build .deb files from upstream's source packages (which are verified by apt-get)
+            && apt-get update \
+            && apt-get build-dep -y $nginxPackages \
+            && ( \
+                cd "$tempDir" \
+                && DEB_BUILD_OPTIONS="nocheck parallel=$(nproc)" \
+                    apt-get source --compile $nginxPackages \
+            ) \
+# we don't remove APT lists here because they get re-downloaded and removed later
+            \
+# reset apt-mark's "manual" list so that "purge --auto-remove" will remove all build dependencies
+# (which is done after we install the built packages so we don't have to redownload any overlapping dependencies)
+            && apt-mark showmanual | xargs apt-mark auto > /dev/null \
+            && { [ -z "$savedAptMark" ] || apt-mark manual $savedAptMark; } \
+            \
+# create a temporary local APT repo to install from (so that dependency resolution can be handled by APT, as it should be)
+            && ls -lAFh "$tempDir" \
+            && ( cd "$tempDir" && dpkg-scanpackages . > Packages ) \
+            && grep '^Package: ' "$tempDir/Packages" \
+            && echo "deb [ trusted=yes ] file://$tempDir ./" > /etc/apt/sources.list.d/temp.list \
+# work around the following APT issue by using "Acquire::GzipIndexes=false" (overriding "/etc/apt/apt.conf.d/docker-gzip-indexes")
+#   Could not open file /var/lib/apt/lists/partial/_tmp_tmp.ODWljpQfkE_._Packages - open (13: Permission denied)
+#   ...
+#   E: Failed to fetch store:/var/lib/apt/lists/partial/_tmp_tmp.ODWljpQfkE_._Packages  Could not open file /var/lib/apt/lists/partial/_tmp_tmp.ODWljpQfkE_._Packages - open (13: Permission denied)
+            && apt-get -o Acquire::GzipIndexes=false update \
+            ;; \
+    esac \
     \
-    export GNUPGHOME="$(mktemp -d)" ; \
-    gpg \
-        --keyserver "ha.pool.sks-keyservers.net" \
-        --keyserver-options timeout=10 \
-        --recv-keys $gpg_keys \
-    ; \
-    gpg --batch --verify nginx.tar.gz.asc nginx.tar.gz ; \
-    gpg --batch --verify naxsi.tar.gz.sig naxsi.tar.gz ; \
-    rm -rf \
-        "$GNUPGHOME" \
-        naxsi.tar.gz.sig \
-        nginx.tar.gz.asc \
-    ;
-
-# RUN yum install -y \
-#         clang \
-#         gcc \
-#         gd \
-#         gd-devel \
-#         GeoIP GeoIP-devel GeoIP-data zlib-devel \
-#         gettext \
-#         glibc-devel \
-#         libxslt-devel \
-#         kernel-devel \
-#         kernel-headers \
-#         make \
-#         openssl-devel \
-#         pcre-devel \
-#         pax-utils
-
-RUN set -ex ; \
-    config=" \
-        --prefix=/etc/nginx \
-        --sbin-path=/usr/sbin/nginx \
-        --modules-path=/usr/lib/nginx/modules \
-        --conf-path=/etc/nginx/nginx.conf \
-        --error-log-path=/var/log/nginx/error.log \
-        --http-log-path=/var/log/nginx/access.log \
-        --pid-path=/var/run/nginx.pid \
-        --lock-path=/var/run/nginx.lock \
-        --http-client-body-temp-path=/var/cache/nginx/client_temp \
-        --http-proxy-temp-path=/var/cache/nginx/proxy_temp \
-        --http-fastcgi-temp-path=/var/cache/nginx/fastcgi_temp \
-        --http-uwsgi-temp-path=/var/cache/nginx/uwsgi_temp \
-        --http-scgi-temp-path=/var/cache/nginx/scgi_temp \
-        --user=nginx \
-        --group=nginx \
-        --add-module=/tmp/naxsi-$NAXSI_VERSION/naxsi_src/ \
-        --with-http_ssl_module \
-        --with-http_realip_module \
-        --with-http_addition_module \
-        --with-http_sub_module \
-        --with-http_dav_module \
-        --with-http_flv_module \
-        --with-http_mp4_module \
-        --with-http_gunzip_module \
-        --with-http_gzip_static_module \
-        --with-http_random_index_module \
-        --with-http_secure_link_module \
-        --with-http_stub_status_module \
-        --with-http_auth_request_module \
-        --with-http_xslt_module=dynamic \
-        --with-http_image_filter_module=dynamic \
-        --with-http_geoip_module=dynamic \
-        --with-threads \
-        --with-stream \
-        --with-stream_ssl_module \
-        --with-stream_ssl_preread_module \
-        --with-stream_realip_module \
-        --with-stream_geoip_module=dynamic \
-        --with-http_slice_module \
-        --with-mail \
-        --with-mail_ssl_module \
-        --with-compat \
-        --with-file-aio \
-        --with-http_v2_module \
-        " \
-    ; \
+    && apt-get install --no-install-recommends --no-install-suggests -y \
+                        $nginxPackages \
+                        gettext-base \
+                        curl \
+    && apt-get remove --purge --auto-remove -y && rm -rf /var/lib/apt/lists/* /etc/apt/sources.list.d/nginx.list \
     \
-    tar -xzf naxsi.tar.gz ; \
-    \
-    rm \
-        naxsi.tar.gz
+# if we have leftovers from building, let's purge them (including extra, unnecessary build deps)
+    && if [ -n "$tempDir" ]; then \
+        apt-get purge -y --auto-remove \
+        && rm -rf "$tempDir" /etc/apt/sources.list.d/temp.list; \
+    fi \
+# forward request and error logs to docker log collector
+    && ln -sf /dev/stdout /var/log/nginx/access.log \
+    && ln -sf /dev/stderr /var/log/nginx/error.log \
+# create a docker-entrypoint.d directory
+    && mkdir /docker-entrypoint.d
 
-COPY nginx.conf /etc/nginx/nginx.conf
-COPY nginx.vh.default.conf /etc/nginx/conf.d/default.conf
+COPY docker-entrypoint.sh /
+COPY 10-listen-on-ipv6-by-default.sh /docker-entrypoint.d
+COPY 20-envsubst-on-templates.sh /docker-entrypoint.d
+ENTRYPOINT ["/docker-entrypoint.sh"]
 
-FROM scratch
-LABEL maintainer "Serhii Turivnyi <sturivny@redhat.com>"
+EXPOSE 80
 
-# COPY --from=nginx-naxsi-build / /
+STOPSIGNAL SIGTERM
 
-VOLUME "/etc/nginx/conf.d" \
-       "/etc/nginx/naxsi" \
-       "/etc/nginx/ssl" \
-       "/usr/share/nginx/html" \
-       "/var/log/nginx"
-
-STOPSIGNAL SIGQUIT
-
-# ============================================================
-
-
-USER 1001
-
-# Not using VOLUME statement since it's not working in OpenShift Online:
-# https://github.com/sclorg/httpd-container/issues/30
-# VOLUME ["/opt/rh/rh-nginx116/root/usr/share/nginx/html"]
-# VOLUME ["/var/opt/rh/rh-nginx116/log/nginx/"]
-
-ENV BASH_ENV=${NGINX_APP_ROOT}/etc/scl_enable \
-    ENV=${NGINX_APP_ROOT}/etc/scl_enable \
-    PROMPT_COMMAND=". ${NGINX_APP_ROOT}/etc/scl_enable"
-
-CMD $STI_SCRIPTS_PATH/usage
+CMD ["nginx", "-g", "daemon off;"]
